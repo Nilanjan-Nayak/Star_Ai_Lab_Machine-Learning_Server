@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description"
+    content="A beautiful AI Gateway Proxy Server & Dashboard. Generate API keys, log to Excel, and cache queries.">
+  <title>Star AI Server | Gateway Dashboard</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+  <header>
+    <div class="logo">
+      <span class="logo-icon"></span>
+      Star AI Server
+    </div>
+    
+    <!-- Tab Controls -->
+    <div class="nav-tabs">
+      <button class="tab-btn active" id="tab-playground-btn">AI Playground</button>
+      <button class="tab-btn" id="tab-dashboard-btn">Server Dashboard</button>
+    </div>
+
+    <div style="font-size: 13px; color: var(--text-muted); display: flex; align-items: center; gap: 6px;">
+      <svg width="14" height="14" fill="currentColor" viewBox="0 0 16 16" style="vertical-align: middle;">
+        <path
+          d="M8 1a2 2 0 0 1 2 2v4H6V3a2 2 0 0 1 2-2zm3 6V3a3 3 0 0 0-6 0v4a2 2 0 0 0-2 2v5a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2zM5 8h6a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z" />
+      </svg>
+      <span id="connection-status">Gateway Connected</span>
+    </div>
+  </header>
+
+  <!-- VIEW 1: PLAYGROUND VIEW -->
+  <main class="main-container" id="playground-view">
+    <!-- Configuration Panel (Sidebar) -->
+    <aside class="panel config-sidebar" id="config-panel">
+      <h2 class="section-title">Configuration Profile</h2>
+
+      <!-- Profile Manager -->
+      <div class="form-group" style="margin-bottom: 8px;">
+        <div style="display: flex; gap: 8px;">
+          <div class="select-wrapper" style="flex: 1;">
+            <select id="profile-select">
+              <option value="default" selected>Default Profile</option>
+            </select>
+          </div>
+          <button type="button" class="btn-icon" id="add-profile-btn" title="Create New Profile"
+            style="width: 44px; height: 44px;">
+            <svg viewBox="0 0 24 24" style="width: 18px; height: 18px;">
+              <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" />
+            </svg>
+          </button>
+          <button type="button" class="btn-icon" id="delete-profile-btn" title="Delete Profile"
+            style="width: 44px; height: 44px;">
+            <svg viewBox="0 0 24 24" style="width: 18px; height: 18px;">
+              <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zm13-15h-3.5l-1-1h-5l-1 1H5v2h14V4z" />
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <h2 class="section-title">Gateway Authorization</h2>
+
+      <!-- Star AI Key Input -->
+      <div class="form-group">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <label for="api-key-input">Star AI API Key</label>
+          <span style="font-size: 11px; color: var(--accent); font-weight: 500;">Gateway Key</span>
+        </div>
+        <div class="api-key-container">
+          <input type="password" id="api-key-input" placeholder="Enter your generated star_key_..." autocomplete="off">
+          <button type="button" class="toggle-pwd" id="toggle-password-btn" aria-label="Toggle Password Visibility">
+            <svg id="eye-icon" viewBox="0 0 24 24">
+              <path
+                d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z" />
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Save Key Checkbox -->
+      <div class="form-group save-key-group">
+        <input type="checkbox" id="save-key-checkbox" checked>
+        <label for="save-key-checkbox">Remember Key on this device</label>
+      </div>
+
+      <h2 class="section-title">Target Model</h2>
+
+      <!-- API Provider -->
+      <div class="form-group">
+        <label for="provider-select">Select Provider</label>
+        <div class="select-wrapper">
+          <select id="provider-select">
+            <option value="gemini" selected>Google Gemini</option>
+            <option value="openai">OpenAI</option>
+            <option value="groq">Groq</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Model Select -->
+      <div class="form-group">
+        <label for="model-select">Model</label>
+        <div class="select-wrapper">
+          <select id="model-select">
+            <!-- Dynamically populated -->
+          </select>
+        </div>
+      </div>
+
+      <h2 class="section-title">Model Settings</h2>
+
+      <!-- System Instructions -->
+      <div class="form-group">
+        <label for="system-instruction">Override System Instructions</label>
+        <textarea id="system-instruction" placeholder="Overrides server default for this request..."
+          style="min-height: 80px;"></textarea>
+      </div>
+
+      <!-- Temperature Slider -->
+      <div class="form-group">
+        <div style="display: flex; justify-content: space-between; font-size: 13px; color: var(--text-secondary);">
+          <label for="temperature-slider">Temperature</label>
+          <span id="temperature-val">0.7</span>
+        </div>
+        <input type="range" id="temperature-slider" min="0" max="2" step="0.1" value="0.7"
+          style="accent-color: var(--primary); cursor: pointer;">
+      </div>
+
+      <!-- Max Tokens -->
+      <div class="form-group">
+        <label for="max-tokens-input">Max Output Tokens</label>
+        <input type="text" id="max-tokens-input" placeholder="Default" value="2048">
+      </div>
+    </aside>
+
+    <!-- Workspace Panel (Output & Input) -->
+    <section class="workspace-panel">
+      <!-- Output Container -->
+      <div class="panel output-container">
+        <div class="output-header">
+          <h2 class="output-title">Response</h2>
+          <div class="output-actions">
+            <!-- Clear response -->
+            <button class="btn-icon" id="clear-btn" title="Clear Response">
+              <svg viewBox="0 0 24 24">
+                <path d="M19 4h-3.5l-1-1h-5l-1 1H5v2h14V4zM6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12z" />
+              </svg>
+            </button>
+            <!-- Copy response -->
+            <button class="btn-icon" id="copy-btn" title="Copy Markdown">
+              <svg viewBox="0 0 24 24">
+                <path
+                  d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="output-window" id="output-window">
+          <div class="empty-state" id="empty-state">
+            <svg viewBox="0 0 24 24">
+              <path
+                d="M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM6 9h12v2H6V9zm8 5H6v-2h8v2zm4-6H6V6h12v2z" />
+            </svg>
+            <p>Enter a query using your custom Star AI Key. The request will route securely through your server, log to Excel, and cache duplicate prompts.</p>
+          </div>
+          <div class="md-content" id="output-content" style="display: none;"></div>
+        </div>
+      </div>
+
+      <!-- Input Box -->
+      <div class="input-box-wrapper">
+        <textarea id="prompt-input" placeholder="Type your query here... (Shift + Enter for new line)"></textarea>
+        <div class="action-row">
+          <div style="font-size: 12px; color: var(--text-muted);" id="token-estimate"></div>
+          <button class="btn btn-primary" id="submit-btn">
+            <span class="spinner"></span>
+            <span id="submit-btn-text">Send Gateway Request</span>
+            <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16" id="submit-icon">
+              <path
+                d="M15.964.686a.5.5 0 0 0-.65-.65L.767 5.855H.766l-.452.18a.5.5 0 0 0-.082.887l.41.26.001.002 4.995 3.178 3.178 4.995.002.002.26.41a.5.5 0 0 0 .886-.083l6-15Zm-1.833 1.89L6.637 10.07l-.215-.338a.5.5 0 0 0-.154-.154l-.338-.215 7.494-7.494 1.178-.262-.262 1.178Z" />
+            </svg>
+          </button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- VIEW 2: SERVER DASHBOARD VIEW -->
+  <main class="main-container dashboard-view" id="dashboard-view" style="display: none;">
+    <!-- Stats Banner -->
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-header">
+          <span class="stat-title">Total Queries Routed</span>
+          <span class="stat-icon">📈</span>
+        </div>
+        <div class="stat-value" id="stat-total-queries">0</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-header">
+          <span class="stat-title">Query Success Rate</span>
+          <span class="stat-icon">✔️</span>
+        </div>
+        <div class="stat-value" id="stat-success-rate">100.0%</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-header">
+          <span class="stat-title">Cache Hit Rate (Efficiency)</span>
+          <span class="stat-icon">⚡</span>
+        </div>
+        <div class="stat-value" id="stat-cache-hit">0.0%</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-header">
+          <span class="stat-title">Avg Response Time</span>
+          <span class="stat-icon">⏱️</span>
+        </div>
+        <div class="stat-value" id="stat-avg-time">0 ms</div>
+      </div>
+    </div>
+
+    <!-- Dashboard Content Area -->
+    <div class="dashboard-content-grid">
+      
+      <!-- Left Column: Settings and Key Creation -->
+      <div class="dashboard-col">
+        <!-- Panel 1: Secure Provider API Keys Configuration -->
+        <section class="panel">
+          <h2 class="section-title">Backend Provider Keys (Stored on Server)</h2>
+          <form id="config-form" class="dashboard-form">
+            <div class="form-group">
+              <label for="config-gemini">Google Gemini API Key</label>
+              <input type="password" id="config-gemini" placeholder="Not Configured (Uses server environment variable if empty)">
+            </div>
+            <div class="form-group">
+              <label for="config-openai">OpenAI API Key</label>
+              <input type="password" id="config-openai" placeholder="Not Configured (Uses server environment variable if empty)">
+            </div>
+            <div class="form-group">
+              <label for="config-groq">Groq API Key</label>
+              <input type="password" id="config-groq" placeholder="Not Configured (Uses server environment variable if empty)">
+            </div>
+            
+            <div class="form-group">
+              <label for="config-global-system">Default Global System Instruction</label>
+              <textarea id="config-global-system" placeholder="Injected into all queries unless overridden by playground..." style="min-height: 70px;"></textarea>
+            </div>
+
+            <!-- Caching Configuration -->
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+              <div class="form-group save-key-group" style="margin-top: 4px;">
+                <input type="checkbox" id="config-cache-enabled" checked>
+                <label for="config-cache-enabled" style="font-weight: 500;">Enable Query Cache</label>
+              </div>
+              <div class="form-group">
+                <label for="config-cache-ttl" style="font-size: 11px;">Cache Lifetime (seconds)</label>
+                <input type="number" id="config-cache-ttl" value="300" style="padding: 8px 12px; font-size: 13px;">
+              </div>
+            </div>
+
+            <button type="submit" class="btn btn-primary" style="margin-top: 10px; width: 100%; justify-content: center;">
+              Save Backend Configuration
+            </button>
+          </form>
+        </section>
+
+        <!-- Panel 2: Star AI API Key Management -->
+        <section class="panel">
+          <h2 class="section-title">Custom Key Generator & Manager</h2>
+          
+          <!-- Generator Form -->
+          <div class="dashboard-form" style="margin-bottom: 20px;">
+            <div class="form-group">
+              <label for="new-key-name">Key Identifier / Owner Name</label>
+              <div style="display: flex; gap: 8px;">
+                <input type="text" id="new-key-name" placeholder="e.g. Frontend App, Dev Key..." style="flex: 1;">
+                <button type="button" class="btn btn-primary" id="btn-generate-key" style="white-space: nowrap;">
+                  Generate Key
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Keys List -->
+          <div class="keys-list-container">
+            <h3 style="font-size: 13px; font-weight: 600; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 12px; border-bottom: 1px solid var(--panel-border); padding-bottom: 6px;">
+              Active Gateway Keys
+            </h3>
+            <div class="keys-table-wrapper">
+              <table class="dashboard-table" id="keys-table">
+                <thead>
+                  <tr>
+                    <th>Identifier</th>
+                    <th>Key Value</th>
+                    <th>Usage</th>
+                    <th>Status</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody id="keys-table-body">
+                  <tr>
+                    <td colspan="5" style="text-align: center; color: var(--text-muted); padding: 20px;">Loading keys...</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- Right Column: Live Query Logs -->
+      <div class="dashboard-col">
+        <section class="panel" style="height: 100%;">
+          <div class="output-header" style="margin-bottom: 16px;">
+            <h2 class="output-title">Routed Query Logs (Excel-Synced)</h2>
+            <button class="btn btn-primary" id="btn-download-excel" style="padding: 8px 16px; font-size: 13px; gap: 6px;">
+              <svg width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
+                <path d="M14 14V4.5L9.5 0H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2zM9.5 1.5L13 5H9.5V1.5zM3 12.5a.5.5 0 0 1 .5-.5h9a.5.5 0 0 1 0 1h-9a.5.5 0 0 1-.5-.5zm0-2a.5.5 0 0 1 .5-.5h9a.5.5 0 0 1 0 1h-9a.5.5 0 0 1-.5-.5zm0-2a.5.5 0 0 1 .5-.5h9a.5.5 0 0 1 0 1h-9a.5.5 0 0 1-.5-.5z"/>
+              </svg>
+              Download Excel Log Sheet
+            </button>
+          </div>
+
+          <!-- Logs Search and Filter -->
+          <div style="display: flex; gap: 12px; margin-bottom: 12px;">
+            <input type="text" id="logs-search" placeholder="Search logs by query or model..." style="flex: 1; padding: 8px 12px; font-size: 13px;">
+            <select id="logs-provider-filter" style="width: 130px; padding: 8px 12px; font-size: 13px;">
+              <option value="all">All Providers</option>
+              <option value="gemini">Gemini</option>
+              <option value="openai">OpenAI</option>
+              <option value="groq">Groq</option>
+            </select>
+          </div>
+
+          <!-- Logs Table -->
+          <div class="logs-table-wrapper" style="height: 580px; overflow-y: auto; background: rgba(8, 11, 17, 0.4); border-radius: var(--border-radius-md); border: 1px solid var(--panel-border);">
+            <table class="dashboard-table" id="logs-table">
+              <thead>
+                <tr>
+                  <th style="width: 130px;">Time</th>
+                  <th>Key / Client</th>
+                  <th>Model</th>
+                  <th>Query</th>
+                  <th>Response</th>
+                  <th>Stats</th>
+                </tr>
+              </thead>
+              <tbody id="logs-table-body">
+                <tr>
+                  <td colspan="6" style="text-align: center; color: var(--text-muted); padding: 40px;">No queries logged yet. Start query requests in the Playground!</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+
+    </div>
+  </main>
+
+  <!-- Notification Banner -->
+  <div class="notification-banner" id="notification-banner">
+    <div id="notification-text"></div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+
+</html>

@@ -1,0 +1,11 @@
+node_modules/
+config.json
+api_keys.json
+api_logs.json
+api_logs.csv
+.env
+.system_generated/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.DS_Store
