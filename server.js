@@ -19,6 +19,7 @@ const CONFIG_PATH = path.join(__dirname, 'config.json');
 const KEYS_PATH = path.join(__dirname, 'api_keys.json');
 const LOGS_JSON_PATH = path.join(__dirname, 'api_logs.json');
 const LOGS_CSV_PATH = path.join(__dirname, 'api_logs.csv');
+const CUSTOM_DB_PATH = path.join(__dirname, 'custom_database.json');
 
 // In-memory cache for queries
 // Key: provider_model_temp_prompt_system
@@ -83,6 +84,12 @@ const initialKeys = [
 
 readJSON(CONFIG_PATH, initialConfig);
 readJSON(KEYS_PATH, initialKeys);
+readJSON(CUSTOM_DB_PATH, {
+  "what is your name": "I am Star AI, your custom-trained intelligent server agent.",
+  "what is star ai": "Star AI is an advanced, multi-model proxy and caching gateway built by Star AI Lab.",
+  "hello": "Hello! I am Star AI. How can I assist you today?",
+  "hi": "Hi there! I am Star AI. How can I help you?"
+});
 
 if (!fs.existsSync(LOGS_CSV_PATH)) {
   const headers = ['Timestamp', 'API Key Name', 'Provider', 'Model', 'Query', 'Answer', 'Status', 'Duration (ms)', 'Cached'].map(escapeCSV).join(',') + '\n';
@@ -130,23 +137,40 @@ function logRequest(apiKeyName, provider, model, query, answer, status, duration
   writeJSON(LOGS_JSON_PATH, logs);
 }
 
+// Helper: Search local QA database and successful logs for the exact query
+function findLocalAnswer(prompt) {
+  if (!prompt) return null;
+  const cleanPrompt = String(prompt).trim().toLowerCase();
+  
+  // 1. Check custom QA database
+  const customDb = readJSON(CUSTOM_DB_PATH, {});
+  if (customDb[cleanPrompt]) {
+    console.log(`[Local Lookup] Found match in custom_database.json for: "${cleanPrompt}"`);
+    return { answer: customDb[cleanPrompt], source: "custom_database" };
+  }
+  
+  // 2. Check historical successful queries in api_logs.json
+  const logs = readJSON(LOGS_JSON_PATH, []);
+  const match = logs.find(l => l.status === 'success' && String(l.query).trim().toLowerCase() === cleanPrompt);
+  if (match && match.answer) {
+    console.log(`[Local Lookup] Found match in api_logs.json for: "${cleanPrompt}"`);
+    return { answer: match.answer, source: "historical_logs" };
+  }
+  
+  return null;
+}
+
 // -------------------------------------------------------------------------
 // ROUTE: API Gateway Endpoint (POST /api/generate)
 // -------------------------------------------------------------------------
 const FALLBACK_MODELS = {
-  "gemini-2.5-flash": "gemini-1.5-flash",
-  "gemini-2.5-pro": "gemini-1.5-pro",
-  "gpt-4o-mini": "gpt-3.5-turbo",
-  "llama-3.3-70b-versatile": "llama-3.1-8b-instant"
+  // No deprecated fallbacks to prevent 404 Errors on older models
 };
 
 // Helper: Perform the actual LLM API HTTP call
-async function executeLLMCall(provider, model, prompt, temperature, maxTokens, systemInstruction, serverConfig) {
+async function executeLLMCall(provider, model, prompt, temperature, maxTokens, systemInstruction, apiKey, serverConfig) {
   if (provider === "gemini") {
-    const geminiKey = serverConfig.geminiKey || process.env.GEMINI_API_KEY;
-    if (!geminiKey) throw new Error("Gemini API key is not configured on the server.");
-    
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
     const finalSystem = systemInstruction || serverConfig.globalSystemInstruction;
     
     const body = {
@@ -175,9 +199,6 @@ async function executeLLMCall(provider, model, prompt, temperature, maxTokens, s
     }
     
   } else if (provider === "openai") {
-    const openaiKey = serverConfig.openaiKey || process.env.OPENAI_API_KEY;
-    if (!openaiKey) throw new Error("OpenAI API key is not configured on the server.");
-    
     const url = "https://api.openai.com/v1/chat/completions";
     const finalSystem = systemInstruction || serverConfig.globalSystemInstruction;
     
@@ -197,7 +218,7 @@ async function executeLLMCall(provider, model, prompt, temperature, maxTokens, s
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${openaiKey}`
+        "Authorization": `Bearer ${apiKey}`
       },
       body: JSON.stringify(body)
     });
@@ -214,9 +235,6 @@ async function executeLLMCall(provider, model, prompt, temperature, maxTokens, s
     }
 
   } else if (provider === "groq") {
-    const groqKey = serverConfig.groqKey || process.env.GROQ_API_KEY;
-    if (!groqKey) throw new Error("Groq API key is not configured on the server.");
-
     const url = "https://api.groq.com/openai/v1/chat/completions";
     const finalSystem = systemInstruction || serverConfig.globalSystemInstruction;
 
@@ -236,7 +254,7 @@ async function executeLLMCall(provider, model, prompt, temperature, maxTokens, s
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${groqKey}`
+        "Authorization": `Bearer ${apiKey}`
       },
       body: JSON.stringify(body)
     });
@@ -258,46 +276,74 @@ async function executeLLMCall(provider, model, prompt, temperature, maxTokens, s
 
 // Helper: Handle retries and fallback
 async function executeLLMWithRetryAndFallback(provider, requestedModel, prompt, temperature, maxTokens, systemInstruction, serverConfig) {
+  let keysString = "";
+  if (provider === "gemini") {
+    keysString = serverConfig.geminiKey || process.env.GEMINI_API_KEY || "";
+  } else if (provider === "openai") {
+    keysString = serverConfig.openaiKey || process.env.OPENAI_API_KEY || "";
+  } else if (provider === "groq") {
+    keysString = serverConfig.groqKey || process.env.GROQ_API_KEY || "";
+  }
+
+  // Parse comma-separated list of keys
+  const apiKeys = keysString.split(',').map(k => k.trim()).filter(k => k.length > 0);
+  if (apiKeys.length === 0) {
+    throw new Error(`${provider.toUpperCase()} API key is not configured on the server.`);
+  }
+
   let currentModel = requestedModel;
-  let attempt = 0;
-  const maxRetries = 2;
-  let delay = 1000;
-  
-  while (true) {
-    try {
-      const text = await executeLLMCall(provider, currentModel, prompt, temperature, maxTokens, systemInstruction, serverConfig);
-      return { text, finalModel: currentModel };
-    } catch (err) {
-      const errMsg = err.message || "";
-      const isTemporary = errMsg.toLowerCase().includes("high demand") ||
-                          errMsg.toLowerCase().includes("overloaded") ||
-                          errMsg.toLowerCase().includes("spikes in demand") ||
-                          errMsg.toLowerCase().includes("try again later") ||
-                          errMsg.toLowerCase().includes("rate limit") ||
-                          errMsg.toLowerCase().includes("429") ||
-                          errMsg.toLowerCase().includes("503");
-                          
-      if (isTemporary) {
-        if (attempt < maxRetries) {
+
+  // Outer loop: iterate through the key list
+  for (let kIdx = 0; kIdx < apiKeys.length; kIdx++) {
+    const currentKey = apiKeys[kIdx];
+    let attempt = 0;
+    const maxRetries = 2;
+    let delay = 1000;
+
+    console.log(`[Proxy] Attempting LLM call using ${provider} API Key ${kIdx + 1}/${apiKeys.length}...`);
+
+    while (attempt <= maxRetries) {
+      try {
+        const text = await executeLLMCall(provider, currentModel, prompt, temperature, maxTokens, systemInstruction, currentKey, serverConfig);
+        return { text, finalModel: currentModel };
+      } catch (err) {
+        const errMsg = err.message || "";
+        const isTemporary = errMsg.toLowerCase().includes("high demand") ||
+                            errMsg.toLowerCase().includes("overloaded") ||
+                            errMsg.toLowerCase().includes("spikes in demand") ||
+                            errMsg.toLowerCase().includes("try again later") ||
+                            errMsg.toLowerCase().includes("rate limit") ||
+                            errMsg.toLowerCase().includes("quota") ||
+                            errMsg.toLowerCase().includes("limit") ||
+                            errMsg.toLowerCase().includes("429") ||
+                            errMsg.toLowerCase().includes("503");
+
+        if (isTemporary && attempt < maxRetries) {
           attempt++;
-          console.warn(`[Proxy] Model ${currentModel} busy. Retrying in ${delay}ms... (Attempt ${attempt}/${maxRetries})`);
+          console.warn(`[Proxy] Key ${kIdx + 1} busy. Retrying in ${delay}ms... (Attempt ${attempt}/${maxRetries})`);
           await new Promise(resolve => setTimeout(resolve, delay));
           delay *= 2; // exponential backoff
           continue;
         }
-        
-        // Retries failed, try fallback
+
+        // If this key failed all retries, rotate to the next key if we have more
+        if (kIdx < apiKeys.length - 1) {
+          console.warn(`[Rotation] Key ${kIdx + 1} failed/exhausted. Rotating to Key ${kIdx + 2}...`);
+          break; // break inner loop, continue outer loop
+        }
+
+        // If it's the last key, try alternate model failover
         const fallback = FALLBACK_MODELS[currentModel];
         if (fallback) {
-          console.warn(`[Proxy] Model ${currentModel} busy and failed after retries. Falling back to ${fallback}...`);
+          console.warn(`[Proxy] Model ${currentModel} busy and all keys exhausted. Falling back to ${fallback}...`);
           currentModel = fallback;
-          attempt = 0;
-          delay = 1000;
-          continue;
+          kIdx = -1; // reset key index to start from first key again for fallback model
+          break; // break inner loop to restart key rotation
         }
+
+        // Throw final error if all keys failed and no fallback available
+        throw err;
       }
-      
-      throw err;
     }
   }
 }
@@ -329,7 +375,22 @@ app.post('/api/generate', async (req, res) => {
 
   const serverConfig = readJSON(CONFIG_PATH, initialConfig);
   
-  // Build cache key
+  // 1. Check custom database & query history first (Intelligent Agent behavior)
+  const localMatch = findLocalAnswer(prompt);
+  if (localMatch) {
+    const duration = Date.now() - start;
+    
+    // Increment key usage
+    keyObj.usage += 1;
+    writeJSON(KEYS_PATH, keys);
+
+    // Log request (cached = true, model indicates local lookup source)
+    logRequest(keyObj.name, provider, `${model} (Local DB)`, prompt, localMatch.answer, "success", duration, true);
+
+    return res.json({ text: localMatch.answer, cached: true });
+  }
+
+  // Build cache key for regular query caching
   const cacheKey = `${provider}_${model}_${temperature}_${prompt}_${systemInstruction || ''}_${serverConfig.globalSystemInstruction || ''}`;
 
   // Check cache if enabled
@@ -337,7 +398,7 @@ app.post('/api/generate', async (req, res) => {
     const cachedEntry = queryCache.get(cacheKey);
     if (cachedEntry && (Date.now() - cachedEntry.timestamp < serverConfig.cacheTTL)) {
       const duration = Date.now() - start;
-      // Increment key usage
+      
       keyObj.usage += 1;
       writeJSON(KEYS_PATH, keys);
 
@@ -370,22 +431,27 @@ app.post('/api/generate', async (req, res) => {
       });
     }
 
-    // Increment usage & save key registry
+    // Increment usage
     keyObj.usage += 1;
     writeJSON(KEYS_PATH, keys);
 
     // Save logs (uses the finalModel in case of fallback failover!)
     logRequest(keyObj.name, provider, finalModel, prompt, text, "success", duration, false);
 
-    // Send response (2nd copy)
-    res.json({ text: text, cached: false });
+    // Send response
+    res.json({ text, cached: false });
 
   } catch (err) {
     const duration = Date.now() - start;
-    logRequest(keyObj.name, provider, model, prompt, err.message, "failed", duration, false);
+    
+    // Graceful user-facing error notice, hiding raw tracebacks
+    const friendlyError = "The server is currently experiencing high demand. Please try again in a few moments.";
+    
+    // Still log the raw error on the server for debugging
+    logRequest(keyObj.name, provider, model, prompt, `Error: ${err.message}`, "failed", duration, false);
     
     console.error("Gateway Forward Error:", err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: friendlyError });
   }
 });
 
