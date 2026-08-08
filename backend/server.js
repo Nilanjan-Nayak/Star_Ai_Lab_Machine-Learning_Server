@@ -12,14 +12,15 @@ const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
-app.use(express.static(__dirname)); // Serve client static files
+app.use(express.static(path.join(__dirname, '..', 'frontend'))); // Serve client static files
 
 // File paths
-const CONFIG_PATH = path.join(__dirname, 'config.json');
-const KEYS_PATH = path.join(__dirname, 'api_keys.json');
-const LOGS_JSON_PATH = path.join(__dirname, 'api_logs.json');
-const LOGS_CSV_PATH = path.join(__dirname, 'api_logs.csv');
-const CUSTOM_DB_PATH = path.join(__dirname, 'custom_database.json');
+const BASE_DIR = path.join(__dirname, '..');
+const CONFIG_PATH = path.join(BASE_DIR, 'config', 'config.json');
+const KEYS_PATH = path.join(BASE_DIR, 'database', 'api_keys.json');
+const LOGS_JSON_PATH = path.join(BASE_DIR, 'database', 'api_logs.json');
+const LOGS_CSV_PATH = path.join(BASE_DIR, 'database', 'api_logs.csv');
+const CUSTOM_DB_PATH = path.join(BASE_DIR, 'database', 'custom_database.json');
 
 // In-memory cache for queries
 // Key: provider_model_temp_prompt_system

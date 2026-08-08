@@ -13,9 +13,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import BaseModel
+import sys
+
+# Ensure project root is in sys.path
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
 from dotenv import load_dotenv
+from backend.agents.demo_agent import chat_with_agent
 
 load_dotenv()
+
 
 app = FastAPI(
     title="Star AI Gateway API",
@@ -53,12 +62,12 @@ app.add_middleware(
 )
 
 # File Paths
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH = os.path.join(BASE_DIR, 'config.json')
-KEYS_PATH = os.path.join(BASE_DIR, 'api_keys.json')
-LOGS_JSON_PATH = os.path.join(BASE_DIR, 'api_logs.json')
-LOGS_CSV_PATH = os.path.join(BASE_DIR, 'api_logs.csv')
-CUSTOM_DB_PATH = os.path.join(BASE_DIR, 'custom_database.json')
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CONFIG_PATH = os.path.join(BASE_DIR, 'config', 'config.json')
+KEYS_PATH = os.path.join(BASE_DIR, 'database', 'api_keys.json')
+LOGS_JSON_PATH = os.path.join(BASE_DIR, 'database', 'api_logs.json')
+LOGS_CSV_PATH = os.path.join(BASE_DIR, 'database', 'api_logs.csv')
+CUSTOM_DB_PATH = os.path.join(BASE_DIR, 'database', 'custom_database.json')
 
 # In-memory query cache
 # Key: provider_model_temp_prompt_system
@@ -419,9 +428,9 @@ async def execute_llm_with_retry_and_fallback(
                     if current_provider in ["openai", "groq"]:
                         gemini_keys = get_api_keys_for_provider("gemini", server_config)
                         if gemini_keys and current_provider != "gemini":
-                            print(f"[Proxy] Sibling and key exhausted. Cross-provider fallback: {current_provider} -> gemini (gemini-1.5-flash)...")
+                            print(f"[Proxy] Sibling and key exhausted. Cross-provider fallback: {current_provider} -> gemini (gemini-2.5-flash)...")
                             current_provider = "gemini"
-                            current_model = "gemini-1.5-flash"
+                            current_model = "gemini-2.5-flash"
                             fallback_triggered = True
                             break
                             
@@ -738,16 +747,31 @@ def get_stats():
     }
 
 # -------------------------------------------------------------------------
+# AGENT ROUTES
+# -------------------------------------------------------------------------
+class AgentChatRequest(BaseModel):
+    message: str
+
+@app.post("/api/agent/chat")
+def agent_chat(req_body: AgentChatRequest):
+    # Retrieve the configured Gemini key from config
+    config = read_json(CONFIG_PATH, initial_config)
+    gemini_key = config.get("geminiKey")
+    
+    if not gemini_key:
+        raise HTTPException(status_code=400, detail="Gemini API Key is not configured.")
+        
+    response_text = chat_with_agent(req_body.message, gemini_key)
+    return {"response": response_text}
+
+# -------------------------------------------------------------------------
 # SERVE STATIC CLIENT FILES
 # -------------------------------------------------------------------------
 # Serve only approved frontend static assets (from 'dist/' if built, otherwise root)
 ALLOWED_STATIC_FILES = {"index.html", "style.css", "app.js"}
 
 def get_static_path(file_name: str) -> str:
-    dist_path = os.path.join(BASE_DIR, "dist", file_name)
-    if os.path.exists(dist_path):
-        return dist_path
-    return os.path.join(BASE_DIR, file_name)
+    return os.path.join(BASE_DIR, "frontend", file_name)
 
 @app.get("/")
 def serve_index():
