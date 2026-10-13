@@ -5,7 +5,9 @@ import time
 import secrets
 import httpx
 import asyncio
+import threading
 from datetime import datetime, timezone
+from datetime import timedelta
 from typing import Optional, Dict, Any, List
 from fastapi import FastAPI, Header, HTTPException, Request, Response, status
 from fastapi.responses import FileResponse, JSONResponse
@@ -22,6 +24,15 @@ if BASE_DIR not in sys.path:
 
 from dotenv import load_dotenv
 from backend.agents.demo_agent import chat_with_agent
+
+try:
+    from google.oauth2 import service_account
+    from googleapiclient.discovery import build
+    from googleapiclient.http import MediaFileUpload
+except ImportError:
+    service_account = None
+    build = None
+    MediaFileUpload = None
 
 load_dotenv()
 
@@ -68,6 +79,15 @@ KEYS_PATH = os.path.join(BASE_DIR, 'database', 'api_keys.json')
 LOGS_JSON_PATH = os.path.join(BASE_DIR, 'database', 'api_logs.json')
 LOGS_CSV_PATH = os.path.join(BASE_DIR, 'database', 'api_logs.csv')
 CUSTOM_DB_PATH = os.path.join(BASE_DIR, 'database', 'custom_database.json')
+LOG_ARCHIVE_DIR = os.path.join(BASE_DIR, 'database', 'log_archives')
+LOG_ROTATION_STATE_PATH = os.path.join(BASE_DIR, 'database', 'log_rotation.json')
+DRIVE_SYNC_STATE_PATH = os.path.join(BASE_DIR, 'database', 'drive_sync.json')
+GOOGLE_DRIVE_FOLDER_ID = os.getenv('GOOGLE_DRIVE_FOLDER_ID', '12-VtHb831npQHPkAhMv-vozL-MPKGscD')
+LOG_ROTATION_DAYS = 20
+LOG_ROTATION_LOCK = threading.Lock()
+
+os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
+os.makedirs(LOG_ARCHIVE_DIR, exist_ok=True)
 
 # In-memory query cache
 # Key: provider_model_temp_prompt_system
@@ -148,6 +168,90 @@ if not os.path.exists(LOGS_CSV_PATH):
         f.write(csv_headers)
 
 read_json(LOGS_JSON_PATH, [])
+if not os.path.exists(LOG_ROTATION_STATE_PATH):
+    write_json(LOG_ROTATION_STATE_PATH, {"periodStartedAt": get_utc_iso()})
+
+
+def reset_csv_log() -> None:
+    headers = ['Timestamp', 'API Key Name', 'Provider', 'Model', 'Query', 'Answer', 'Status', 'Duration (ms)', 'Cached']
+    csv_headers = ",".join(escape_csv(h) for h in headers) + "\n"
+    with open(LOGS_CSV_PATH, 'w', encoding='utf-8') as f:
+        f.write(csv_headers)
+
+
+def rotate_logs_if_due() -> None:
+    with LOG_ROTATION_LOCK:
+        state = read_json(LOG_ROTATION_STATE_PATH, {"periodStartedAt": get_utc_iso()})
+        started_at = state.get("periodStartedAt")
+        try:
+            period_started = datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            period_started = datetime.now(timezone.utc)
+
+        now = datetime.now(timezone.utc)
+        if now - period_started < timedelta(days=LOG_ROTATION_DAYS):
+            return
+
+        logs = read_json(LOGS_JSON_PATH, [])
+        if logs:
+            archive_name = f"routed_query_logs_{period_started.strftime('%Y%m%d')}_{now.strftime('%Y%m%d')}.json"
+            archive_path = os.path.join(LOG_ARCHIVE_DIR, archive_name)
+            if write_json(archive_path, logs):
+                upload_archive_to_google_drive(archive_path)
+
+        write_json(LOGS_JSON_PATH, [])
+        reset_csv_log()
+        write_json(LOG_ROTATION_STATE_PATH, {"periodStartedAt": get_utc_iso()})
+
+
+def upload_archive_to_google_drive(archive_path: str) -> bool:
+    if not service_account or not build or not MediaFileUpload:
+        return False
+
+    credentials_path = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
+    credentials_json = os.getenv('GOOGLE_SERVICE_ACCOUNT_JSON')
+    if not credentials_path and not credentials_json:
+        return False
+
+    try:
+        scopes = ['https://www.googleapis.com/auth/drive.file']
+        if credentials_json:
+            credentials = service_account.Credentials.from_service_account_info(
+                json.loads(credentials_json), scopes=scopes
+            )
+        else:
+            credentials = service_account.Credentials.from_service_account_file(
+                credentials_path, scopes=scopes
+            )
+
+        drive = build('drive', 'v3', credentials=credentials, cache_discovery=False)
+        metadata = {
+            'name': os.path.basename(archive_path),
+            'parents': [GOOGLE_DRIVE_FOLDER_ID]
+        }
+        media = MediaFileUpload(archive_path, mimetype='application/json')
+        result = drive.files().create(
+            body=metadata,
+            media_body=media,
+            fields='id,name,webViewLink'
+        ).execute()
+
+        sync_state = read_json(DRIVE_SYNC_STATE_PATH, {"uploaded": {}})
+        sync_state.setdefault('uploaded', {})[os.path.basename(archive_path)] = result.get('id')
+        write_json(DRIVE_SYNC_STATE_PATH, sync_state)
+        print(f"[Google Drive] Uploaded {result.get('name')} to the configured folder.")
+        return True
+    except Exception as e:
+        print(f"[Google Drive] Upload skipped: {e}")
+        return False
+
+
+def sync_pending_drive_archives() -> None:
+    sync_state = read_json(DRIVE_SYNC_STATE_PATH, {"uploaded": {}})
+    uploaded = sync_state.get('uploaded', {})
+    for filename in os.listdir(LOG_ARCHIVE_DIR):
+        if filename.endswith('.json') and filename not in uploaded:
+            upload_archive_to_google_drive(os.path.join(LOG_ARCHIVE_DIR, filename))
 
 # Helper: Search local QA database and successful logs for the exact query
 def find_local_answer(prompt: str) -> Optional[Dict[str, str]]:
@@ -174,6 +278,7 @@ def find_local_answer(prompt: str) -> Optional[Dict[str, str]]:
 
 # Helper: Log request to both JSON and CSV
 def log_request(api_key_name: str, provider: str, model: str, query: str, answer: str, status_str: str, duration: int, cached: bool):
+    rotate_logs_if_due()
     timestamp = get_utc_iso()
     
     # 1. Append to CSV
@@ -710,6 +815,30 @@ def download_logs():
         filename="star_ai_api_logs.csv"
     )
 
+@app.get("/api/admin/logs/archives")
+def list_log_archives():
+    archives = []
+    for filename in sorted(os.listdir(LOG_ARCHIVE_DIR), reverse=True):
+        if filename.endswith(".json"):
+            file_path = os.path.join(LOG_ARCHIVE_DIR, filename)
+            archives.append({
+                "filename": filename,
+                "size": os.path.getsize(file_path),
+                "updatedAt": datetime.fromtimestamp(os.path.getmtime(file_path), timezone.utc).isoformat().replace("+00:00", "Z")
+            })
+    return archives
+
+@app.get("/api/admin/logs/archives/{filename}")
+def download_log_archive(filename: str):
+    safe_filename = os.path.basename(filename)
+    if safe_filename != filename or not safe_filename.endswith(".json"):
+        raise HTTPException(status_code=400, detail="Invalid archive filename.")
+
+    archive_path = os.path.join(LOG_ARCHIVE_DIR, safe_filename)
+    if not os.path.exists(archive_path):
+        raise HTTPException(status_code=404, detail="Log archive not found.")
+    return FileResponse(archive_path, media_type="application/json", filename=safe_filename)
+
 @app.get("/api/admin/stats")
 def get_stats():
     logs = read_json(LOGS_JSON_PATH, [])
@@ -790,4 +919,6 @@ if __name__ == "__main__":
     print(f"STAR AI GATEWAY SERVER (FASTAPI) RUNNING ON PORT {port}")
     print(f"Access local dashboard: http://localhost:{port}")
     print(f"====================================================")
+    rotate_logs_if_due()  # Run the log rotation check at startup
+    sync_pending_drive_archives()
     uvicorn.run("server:app", host="0.0.0.0", port=port, reload=True)
